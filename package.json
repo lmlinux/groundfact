@@ -1,0 +1,10 @@
+{
+  "name": "groundfact",
+  "version": "0.1.0",
+  "description": "Upstream facts compiler for agent context: probes build the machine profile, blocks assemble into every agent's global and project context files, and drift stays detectable.",
+  "private": true,
+  "type": "module",
+  "bin": { "groundfact": "bin/groundfact.mjs" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}
