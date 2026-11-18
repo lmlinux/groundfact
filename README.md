@@ -89,10 +89,13 @@ pattern:
 1. `adopt` — everything becomes a user block; `build --force` takes the target
    over (the original is backed up as `.groundfact-orig`)
 2. migrate one section at a time: `groundfact migrate <block-id>` creates a
-   **frozen probe** that echoes the adopted text — that text is the *oracle*.
+   **frozen probe** that echoes the adopted text — that text is the *oracle*;
+   migrate also runs the probe once, loading the oracle into the machine
+   profile as the comparison baseline.
    An agent (or human) then replaces the echo with real detection and
-   iterates: `probe` shows the diff against the oracle, so a hallucinated
-   "fact" cannot slip through — every differing line must be explained.
+   iterates: `probe` shows the old-text → measured-reality diff, so a
+   hallucinated "fact" cannot slip through — every differing line must be
+   explained.
    The full recipe and the classification guide (probeable / policy / history)
    live in [SKILL.md](SKILL.md).
 3. delete the migrated block, `build`, and `check` guards consistency

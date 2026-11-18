@@ -44,6 +44,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GENERATED_MARK = '<!-- groundfact:generated';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// hand-written files replaced this run — surfaced as a migration checklist at the
+// end of build, and as an un-adopted-backup warning in check
+const replacedOriginals = [];
+
+const COMMAND_HELP = {
+  init: ['initialize ~/.groundfact with sample probes and blocks', 'groundfact init'],
+  probe: ['run probes, refresh the machine profile, report changes', 'groundfact probe [--verify]'],
+  build: ['assemble blocks and the machine profile into targets', 'groundfact build [--force] | --project <dir> | --rulesync <dir>'],
+  adopt: ['mechanically adopt a hand-written file (verbatim, split at ## headings)', 'groundfact adopt <file> [--force]'],
+  migrate: ['turn an adopted block into a frozen probe and load the oracle baseline', 'groundfact migrate <block-id> [--force]'],
+  list: ['preview which blocks land in each target', 'groundfact list [--project <dir>]'],
+  check: ['drift detection: hand edits vs stale sources; exit 1 on drift', 'groundfact check'],
+  mcp: ['run as an MCP server over stdio (typed tools)', 'groundfact mcp'],
+  version: ['print the version', 'groundfact version'],
+};
+
 const log = (...a) => console.log(...a);
 let IN_MCP = false; // MCP mode: errors become tool results instead of exits
 const die = (msg, code = 1) => {
@@ -426,7 +442,7 @@ function cmdProbe(opts = {}) {
     } else {
       log(`⚠ machine facts changed (${diffs.length} lines):`);
       showDiff(diffs);
-      log('(the change is in the machine itself; re-run groundfact build to distribute)');
+      log('(the machine profile changed — the machine itself, or a probe you just edited; a realified probe shows its oracle diff here; re-run groundfact build to distribute)');
     }
   }
 }
@@ -498,6 +514,7 @@ function writeManaged(filePath, content, label, opts) {
     }
     fs.writeFileSync(filePath + '.groundfact-orig', prev);
     log(`backed up original → ${filePath}.groundfact-orig`);
+    replacedOriginals.push({ label, backup: filePath + '.groundfact-orig' });
   }
   mkdirp(path.dirname(filePath));
   fs.writeFileSync(filePath, content);
@@ -609,6 +626,15 @@ function cmdBuild(opts) {
   state.builtAt = new Date().toISOString();
   saveState(state);
   log(wrote || pruned ? `done, ${wrote} file(s) written, ${pruned} stale file(s) pruned. drift governance: groundfact check` : 'no files written.');
+  if (replacedOriginals.length) {
+    log('');
+    log('⚠ replaced hand-written files — their content is NOT in the generated files yet:');
+    for (const r of replacedOriginals) {
+      log(`  ${r.label}: original saved to ${r.backup}`);
+      log(`    migrate its content: groundfact adopt ${r.backup}`);
+    }
+    log('  adopt each backup, prune the new blocks/adopted/*.md to taste, rebuild, check.');
+  }
 }
 
 // ---------------------------------------------------------------- adopt
@@ -745,10 +771,14 @@ function cmdMigrate(idArg, opts) {
   fs.writeFileSync(probeFile, probe);
   fs.chmodSync(probeFile, 0o755);
   log(`frozen probe created: probes.d/${id}.sh (echoes the adopted text — your oracle)`);
+  // load the oracle into the machine profile as the comparison baseline, so the
+  // next probe run shows a clean old-text → measured-reality diff
+  cmdProbe({});
   log('migration loop, for an agent or a human:');
   log('  1. edit the probe: real detection instead of the heredoc');
   log('     (probeable → detect it; policy → keep the words; history → drop it)');
-  log('  2. groundfact probe          — the diff vs the oracle must be empty or explained');
+  log('  2. groundfact probe          — the diff it prints is the oracle comparison:');
+  log('     every line must be explained (probe wrong, or reality changed)');
   log('  3. groundfact probe --verify — determinism must pass');
   log(`  4. rm blocks/adopted/${id}.md && groundfact build && groundfact check`);
   log('note: a migrated section reaches targets through the machine profile;');
@@ -822,6 +852,9 @@ function cmdCheck() {
     const spec = cfg.targets[key] != null ? targetSpec(cfg.targets[key]) : null;
     const filePath = rec ? rec.path : spec ? expandTilde(spec.path) : null;
     const disk = readIf(filePath);
+    if (disk != null && exists(`${filePath}.groundfact-orig`)) {
+      log(`⚠ ${key}: an un-adopted backup exists (${path.basename(filePath)}.groundfact-orig) — the original rules are not in the generated file; migrate them: groundfact adopt ${filePath}.groundfact-orig (or delete the backup once you no longer want them)`);
+    }
     if (disk == null) {
       log(`✗ ${key}: target file missing (${filePath})`);
       drift++;
@@ -998,6 +1031,14 @@ if (opts.force) {
 opts.project = flag('--project');
 opts.rulesync = flag('--rulesync');
 opts.verify = rest.includes('--verify');
+
+// subcommand --help: print the command's own usage instead of running it
+if (cmd && (rest.includes('--help') || rest.includes('-h'))) {
+  const h = COMMAND_HELP[cmd];
+  if (h) log(`groundfact ${cmd} — ${h[0]}\nusage: ${h[1]}`);
+  else log(`unknown command: ${cmd} — run groundfact with no arguments for the full help`);
+  process.exit(0);
+}
 
 switch (cmd) {
   case 'init':

@@ -34,7 +34,9 @@ For each sentence in the block:
 
 1. `groundfact migrate <block-id>` creates `probes.d/<block-id>.sh` as a
    **frozen probe**: it `cat`s the adopted text verbatim. That text is your
-   **oracle** — the ground truth as the human wrote it.
+   **oracle** — the ground truth as the human wrote it. The command also runs
+   the probe once, loading the oracle into the machine profile as the
+   comparison baseline.
 2. Edit the probe: replace the heredoc with real detection. Rules:
    - emit only what changes when reality changes — no timestamps, no
      unordered listings, no hostnames that rotate
@@ -43,7 +45,8 @@ For each sentence in the block:
      the lines that are wrong, nothing else
    - quote the heredoc delimiter so nothing expands
 3. Verify against the oracle:
-   - `groundfact probe` — the diff it prints (old profile vs new) must be
+   - `groundfact probe` — the diff it prints is the oracle comparison: old
+     text → measured reality. It must be empty if reality still matches the
      empty if reality still matches the human's text. Every differing line
      is either (a) your probe is wrong — fix it, or (b) reality changed —
      say so explicitly, line by line. Never hand-wave a diff away.
