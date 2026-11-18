@@ -1,10 +1,15 @@
 {
   "name": "groundfact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Upstream facts compiler for agent context: AI migrates hand-written machine facts once; every run after that is deterministic sync and drift detection.",
   "type": "module",
-  "bin": { "groundfact": "bin/groundfact.mjs" },
-  "files": ["bin/groundfact.mjs", "SKILL.md"],
+  "bin": {
+    "groundfact": "bin/groundfact.mjs"
+  },
+  "files": [
+    "bin/groundfact.mjs",
+    "SKILL.md"
+  ],
   "keywords": [
     "agents",
     "agentic-coding",
@@ -20,10 +25,19 @@
     "probes",
     "single-source-of-truth"
   ],
-  "repository": { "type": "git", "url": "git+https://github.com/lmlinux/groundfact.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lmlinux/groundfact.git"
+  },
   "homepage": "https://github.com/lmlinux/groundfact#readme",
-  "bugs": { "url": "https://github.com/lmlinux/groundfact/issues" },
-  "scripts": { "test": "node --test" },
-  "engines": { "node": ">=18" },
+  "bugs": {
+    "url": "https://github.com/lmlinux/groundfact/issues"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT"
 }
