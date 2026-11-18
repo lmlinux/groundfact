@@ -29,6 +29,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,7 +37,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '0.1.0';
+const VERSION = createRequire(import.meta.url)('../package.json').version; // single source: package.json
 const HOME = os.homedir();
 const ROOT = path.join(HOME, '.groundfact');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
