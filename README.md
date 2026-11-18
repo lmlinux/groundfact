@@ -74,6 +74,18 @@ typed tools over shell (it is the same CLI behind a JSON-RPC facade); native
 plugins are the only layer with real lock-in, and that layer belongs to
 rulesync's hook/permission sync, not to this project.
 
+## What's in the latest release (v0.1.2+)
+
+Found by a simulated first-time user (fresh codex agent, sandboxed HOME, `npx groundfact@0.1.1`, full workflow walked end to end):
+
+- `build --force` prints a **migration checklist** when it replaces hand-written files — the exact `groundfact adopt <backup>` command for each, so years of rules aren't silently left outside the generated files
+- `check` warns about **un-adopted backups** next to managed targets
+- `migrate` **auto-loads the oracle baseline** (runs the frozen probe immediately), making the realify-then-diff flow one step shorter
+- Subcommand `--help` works (e.g. `groundfact init --help` prints usage instead of executing init)
+- CLI version comes from `package.json` (single source, no drift)
+- A failed probe exits 1 and never rewrites the machine profile
+- 10/10 regression tests, GitHub Actions CI for Node 20/22/24
+
 ## Adopting an existing hand-written file — no LLM required
 
 `groundfact adopt ~/.pi/agent/AGENTS.md` splits the file at `##` headings and
