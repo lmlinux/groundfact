@@ -1,6 +1,6 @@
 # groundfact
 
-**An upstream facts compiler for agent context** — frees your machine environment, cross-project principles, and project conventions from the N hand-maintained copies of AGENTS.md / CLAUDE.md: probes auto-generate a machine profile, hand-written blocks assemble per target and per project trait, and drift is detectable.
+**An upstream facts compiler for agent context** — AI migrates your hand-written machine facts once; every run after that is deterministic sync and drift detection. It frees your machine environment, cross-project principles, and project conventions from the N hand-maintained copies of AGENTS.md / CLAUDE.md: probes build a machine profile, hand-written blocks assemble per target and per project trait, and drift stays detectable.
 
 ```
 probes.d/*.sh ──probe──▶ facts/machine.md (machine profile, probed — never hand-written)
@@ -24,10 +24,23 @@ The sync/fan-out layer is already mature (rulesync: 30+ targets, import/convert,
 | fear of clobbering hand-written files | only files with the `groundfact:generated` header are managed; existing hand-written files are skipped by default; `--force` adopts them (with a `.groundfact-orig` backup) |
 | adopting years of hand-written facts feels like a rewrite | `adopt` splits at headings and stores sections verbatim — the fact/principle reclassification can happen one section at a time, years later if ever |
 
+## Installation
+
+Requires Node ≥ 18 and a Unix-like environment with `/bin/sh`. There are no runtime dependencies.
+
+```bash
+git clone https://github.com/lmlinux/groundfact.git
+cd groundfact
+npm link                       # makes the groundfact command available
+groundfact version
+```
+
+You can also run `node /path/to/groundfact/bin/groundfact.mjs` directly without linking.
+
 ## Quick start
 
 ```bash
-node bin/groundfact.mjs init       # initialize ~/.groundfact (sample probes and blocks included)
+groundfact init                    # initialize ~/.groundfact (sample probes and blocks included)
 groundfact probe                   # generate the machine profile; diff reports changes
 groundfact probe --verify          # run probes twice; flag non-deterministic output
 groundfact adopt <file>            # mechanically adopt a hand-written file (no LLM)
@@ -139,7 +152,7 @@ weight: 30                # lower sorts earlier; the machine profile is always f
 
 ## Generated-file protocol
 
-Every managed file starts with `<!-- groundfact:generated … -->` (the adoption credential); every block is wrapped in `begin/end` markers carrying a content sha, so drift can be attributed per block. Snapshots live in `last/`; `check` compares three ways (disk / last generation / current sources) and splits drift into two kinds:
+Every managed file carries a `<!-- groundfact:generated … -->` marker (immediately after frontmatter for rulesync sources); every block is wrapped in `begin/end` markers carrying a content sha, so drift can be attributed per block. Snapshots live in `last/`; `check` compares three ways (disk / last generation / current sources) and splits drift into two kinds:
 
 - **hand-edit drift**: disk ≠ last generation → keep it by moving the change into `blocks/`, or discard it by rebuilding
 - **stale sources**: disk = last generation ≠ current sources → rebuild to sync
@@ -150,6 +163,14 @@ Every managed file starts with `<!-- groundfact:generated … -->` (the adoption
 - per-block dry-run diff: preview every target's changes before build
 - team sharing: blocks from a git repo + declarative `sources` (rulesync already does this; connect directly)
 - probe sandboxing and timeout policies
+
+## Development
+
+```bash
+npm test
+```
+
+The integration tests use isolated temporary home directories. CI runs the suite on Node 20, 22, and 24.
 
 ## License
 

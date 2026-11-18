@@ -61,6 +61,11 @@ const readIf = (f) => {
   }
 };
 const exists = (f) => fs.existsSync(f);
+const isManagedContent = (text) => {
+  if (text.startsWith(GENERATED_MARK)) return true;
+  const frontmatter = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  return frontmatter != null && text.slice(frontmatter[0].length).startsWith(GENERATED_MARK);
+};
 const expandTilde = (p) => (p.startsWith('~/') ? path.join(HOME, p.slice(2)) : p);
 const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
 const mkdirp = (d) => fs.mkdirSync(d, { recursive: true });
@@ -83,9 +88,9 @@ function loadConfig() {
 }
 
 /** frontmatter: parses just enough key/values (string/number/bool/JSON array) */
-function parseFrontmatter(text, fallbackId) {
+function parseFrontmatter(text, fallbackId, preserveBody = false) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!m) return { meta: { id: fallbackId, scope: 'user', targets: ['*'], weight: 50 }, body: text.trim() };
+  if (!m) return { meta: { id: fallbackId, scope: 'user', targets: ['*'], weight: 50 }, body: preserveBody ? text : text.trim() };
   const meta = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
@@ -107,7 +112,7 @@ function parseFrontmatter(text, fallbackId) {
   if (meta.targets == null) meta.targets = ['*'];
   if (!Array.isArray(meta.targets)) meta.targets = [meta.targets];
   meta.weight = typeof meta.weight === 'number' ? meta.weight : 50;
-  return { meta, body: text.slice(m[0].length).trim() };
+  return { meta, body: preserveBody ? text.slice(m[0].length) : text.slice(m[0].length).trim() };
 }
 
 /** minimal glob (* ** ?), used for when-conditions */
@@ -207,9 +212,10 @@ function showDiff(diffs, max = 30) {
 const PROBE_PROXY = `#!/bin/sh
 # probe: proxy egress
 echo '## Network & proxies'
-for f in /root/proxy /root/proxy-us; do
+for f in "$HOME/proxy" "$HOME/proxy-us"; do
   if [ -f "$f" ]; then
     server=$(grep -m1 -oE 'https?://[^ "'"'"']+' "$f" | head -1)
+    server=$(printf '%s\n' "$server" | sed -E 's#(https?://)[^/@]+@#\\1<redacted>@#')
     echo "- source $f -> $server"
   else
     echo "- $f not found"
@@ -364,26 +370,35 @@ function runProbes() {
 
 function cmdProbe(opts = {}) {
   const a = runProbes();
-  if (opts.verify) {
+  let b = null;
+  let volatile = false;
+  if (opts.verify && !a.failed.length) {
     // determinism check: a probe whose output differs between two runs with
     // no machine change would cry wolf on every probe — a probe bug, not drift
-    const b = runProbes();
-    let volatile = false;
+    b = runProbes();
     for (const r of a.results) {
       const again = b.results.find((x) => x.name === r.name);
-      if (!again || again.out !== r.out) {
+      if (again && again.out !== r.out) {
         log(`✗ volatile probe: ${r.name} — output differs between back-to-back runs; emit stable facts only (no timestamps, no unordered listings)`);
         volatile = true;
       }
     }
-    if (!volatile) log('all probes deterministic (two consecutive runs identical)');
-    process.exitCode = volatile ? 1 : 0;
-    if (volatile) return; // never write facts from unstable probes
   }
+  const failed = [...new Set([...a.failed, ...(b?.failed || [])])];
+  if (failed.length) {
+    log(`probes failed: ${failed.join(', ')}`);
+    log('machine profile not updated');
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.verify && volatile) {
+    process.exitCode = 1;
+    return;
+  }
+  if (opts.verify) log('all probes deterministic (two consecutive runs identical)');
   const sections = a.results
     .filter((r) => r.out)
     .map((r) => `<!-- groundfact:probe id=${r.name.replace(/\.sh$/, '')} -->\n${r.out}`);
-  const { failed } = a;
   const now = new Date().toISOString();
   const content =
     [
@@ -413,7 +428,6 @@ function cmdProbe(opts = {}) {
       log('(the change is in the machine itself; re-run groundfact build to distribute)');
     }
   }
-  if (failed.length) log(`probes failed: ${failed.join(', ')}`);
 }
 
 // ---------------------------------------------------------------- collect blocks
@@ -427,7 +441,7 @@ function collectBlocks() {
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.md')).sort()) {
       const text = readIf(path.join(dir, f));
       if (text == null) continue;
-      const { meta, body } = parseFrontmatter(text, f.replace(/\.md$/, ''));
+      const { meta, body } = parseFrontmatter(text, f.replace(/\.md$/, ''), dirName === 'adopted');
       if (meta.scope !== scope) meta.scope = scope; // the directory decides scope; guard against typos
       blocks.push({ ...meta, body, file: path.join(dir, f) });
     }
@@ -476,7 +490,7 @@ function selectedFor(blocks, { projectDir = null, includes }) {
 
 function writeManaged(filePath, content, label, opts) {
   const prev = readIf(filePath);
-  if (prev != null && !prev.startsWith(GENERATED_MARK)) {
+  if (prev != null && !isManagedContent(prev)) {
     if (!opts.force) {
       log(`skip ${label}: ${filePath} exists and was not generated by groundfact (adopt with --force; a .groundfact-orig backup is made first)`);
       return false;
@@ -495,6 +509,7 @@ function cmdBuild(opts) {
   if (!blocks.some((b) => b.id === 'machine')) log('(note: no machine profile yet; run groundfact probe)');
   const state = loadState();
   let wrote = 0;
+  let pruned = 0;
 
   if (opts.project) {
     const projectDir = path.resolve(opts.project);
@@ -503,13 +518,28 @@ function cmdBuild(opts) {
     const sel = selectedFor(blocks, { projectDir, includes });
     const fileName = cfg.projectFileName || 'AGENTS.md';
     const out = path.join(projectDir, fileName);
+    const key = `project:${projectDir}`;
     if (!sel.length) {
-      log(`skip project ${projectDir}: no matching blocks (no when-condition hit)`);
-      return;
-    }
-    if (writeManaged(out, render(sel, `project:${projectDir}`), `project ${projectDir}`, opts)) {
-      state.targets[`project:${projectDir}`] = { path: out, builtAt: new Date().toISOString(), sha256: sha(sel.map((b) => b.id).join()) };
-      saveSnapshot(`project:${projectDir}`, render(sel, `project:${projectDir}`));
+      const candidates = new Set([out, state.targets[key]?.path].filter(Boolean));
+      const stale = [...candidates].filter((filePath) => {
+        const previous = readIf(filePath);
+        return previous != null && isManagedContent(previous);
+      });
+      if (stale.length) {
+        for (const filePath of stale) {
+          fs.unlinkSync(filePath);
+          pruned++;
+          log(`pruned project ${projectDir}: no matching blocks → ${filePath}`);
+        }
+      } else {
+        log(`skip project ${projectDir}: no matching blocks (no when-condition hit)`);
+      }
+      delete state.targets[key];
+      const snapshot = snapFile(key);
+      if (exists(snapshot)) fs.unlinkSync(snapshot);
+    } else if (writeManaged(out, render(sel, key), `project ${projectDir}`, opts)) {
+      state.targets[key] = { path: out, builtAt: new Date().toISOString(), sha256: sha(sel.map((b) => b.id).join()) };
+      saveSnapshot(key, render(sel, key));
       wrote++;
       log(`project assembly → ${out} (${sel.length} block(s))`);
       for (const b of sel) log(`  - ${b.id}${b.when ? ' (when matched)' : ''}`);
@@ -518,6 +548,7 @@ function cmdBuild(opts) {
     const rsDir = path.resolve(opts.rulesync);
     mkdirp(path.join(rsDir, 'rules'));
     const sel = selectedFor(blocks, { includes: ['machine', 'user'] });
+    const desiredRules = new Set(sel.map((b) => `${b.id}.md`));
     for (const b of sel) {
       const fm = [
         '---',
@@ -526,7 +557,17 @@ function cmdBuild(opts) {
         b.targets.includes('*') ? 'targets: ["*"]' : `targets: ${JSON.stringify(b.targets)}`,
         '---',
       ].join('\n');
-      fs.writeFileSync(path.join(rsDir, 'rules', `${b.id}.md`), `${fm}\n\n${b.body}\n`);
+      const content = `${fm}\n${GENERATED_MARK} version=${VERSION} target=rulesync:${b.id} -->\n\n${b.body}\n`;
+      if (writeManaged(path.join(rsDir, 'rules', `${b.id}.md`), content, `rulesync ${b.id}`, opts)) wrote++;
+    }
+    for (const fileName of fs.readdirSync(path.join(rsDir, 'rules')).filter((name) => name.endsWith('.md'))) {
+      if (desiredRules.has(fileName)) continue;
+      const filePath = path.join(rsDir, 'rules', fileName);
+      const previous = readIf(filePath);
+      if (previous == null || !isManagedContent(previous)) continue;
+      fs.unlinkSync(filePath);
+      pruned++;
+      log(`pruned stale rulesync rule → ${filePath}`);
     }
     // also ship the agent recipe as a rulesync skill, so rulesync can fan it
     // out to every agent's skill directory alongside the rules
@@ -534,14 +575,14 @@ function cmdBuild(opts) {
     if (skillSrc) {
       const skillDir = path.join(rsDir, 'skills', 'groundfact');
       mkdirp(skillDir);
-      fs.writeFileSync(
-        path.join(skillDir, 'SKILL.md'),
-        `---\nname: groundfact\ndescription: Turn hand-written machine facts into probes; drift governance for agent context files\n---\n\n${skillSrc}`,
-      );
-      log('skill emitted → skills/groundfact/SKILL.md (rulesync fans it out with the rules)');
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      const content = `---\nname: groundfact\ndescription: Turn hand-written machine facts into probes; drift governance for agent context files\n---\n${GENERATED_MARK} version=${VERSION} target=rulesync:skill -->\n\n${skillSrc}`;
+      if (writeManaged(skillFile, content, 'rulesync skill', opts)) {
+        wrote++;
+        log('skill emitted → skills/groundfact/SKILL.md (rulesync fans it out with the rules)');
+      }
     }
-    log(`rulesync sources written to ${rsDir}/rules/ (${sel.length} block(s)) → run rulesync generate there to fan out`);
-    wrote += sel.length;
+    log(`rulesync sources processed in ${rsDir}/rules/ (${sel.length} block(s)) → run rulesync generate there to fan out`);
   } else {
     const entries = Object.entries(cfg.targets || {});
     if (!entries.length) die('no targets configured in groundfact.json');
@@ -566,10 +607,45 @@ function cmdBuild(opts) {
   }
   state.builtAt = new Date().toISOString();
   saveState(state);
-  log(wrote ? `done, ${wrote} file(s) written. drift governance: groundfact check` : 'no files written.');
+  log(wrote || pruned ? `done, ${wrote} file(s) written, ${pruned} stale file(s) pruned. drift governance: groundfact check` : 'no files written.');
 }
 
 // ---------------------------------------------------------------- adopt
+
+function splitAdoptedSections(text) {
+  const lines = [];
+  const linePattern = /([^\r\n]*)(\r\n|\n|\r|$)/g;
+  let match;
+  while ((match = linePattern.exec(text)) && match[0]) {
+    lines.push({ text: match[1], start: match.index });
+  }
+  const sections = [];
+  let start = 0;
+  let title = null;
+  let fence = null;
+  const push = (end) => {
+    if (end > start) sections.push({ title, text: text.slice(start, end) });
+  };
+  for (const line of lines) {
+    if (fence) {
+      const closing = line.text.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = line.text.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (opening) {
+      fence = { char: opening[1][0], length: opening[1].length };
+      continue;
+    }
+    if (/^##[ \t]+/.test(line.text)) {
+      push(line.start);
+      start = line.start;
+      title = line.text.replace(/^##[ \t]+/, '').trim();
+    }
+  }
+  push(text.length);
+  return sections;
+}
 
 /** mechanically adopt an existing hand-written file: split at ## headings,
  *  content kept verbatim, no semantics — LLM-free by design. The
@@ -580,25 +656,13 @@ function cmdAdopt(fileArg, opts) {
   const src = path.resolve(fileArg);
   const text = readIf(src);
   if (text == null) die(`cannot read ${src}`);
-  if (text.startsWith(GENERATED_MARK)) die(`${src} is already groundfact-generated; nothing to adopt`);
+  if (isManagedContent(text)) die(`${src} is already groundfact-generated; nothing to adopt`);
   const cfg = loadConfig();
   const outDir = path.join(ROOT, 'blocks/adopted');
   mkdirp(outDir);
 
-  // split into sections at ## headings (content before the first is the preamble)
-  const lines = text.split('\n');
-  const sections = [];
-  let cur = { title: null, lines: [] };
-  for (const line of lines) {
-    if (/^##\s+/.test(line)) {
-      if (cur.lines.some((l) => l.trim())) sections.push(cur);
-      cur = { title: line.replace(/^##\s+/, '').trim(), lines: [line] };
-    } else {
-      cur.lines.push(line);
-    }
-  }
-  if (cur.lines.some((l) => l.trim())) sections.push(cur);
-  if (!sections.length) die('no non-empty sections found');
+  const sections = splitAdoptedSections(text);
+  if (!sections.some((section) => section.text.trim())) die('no non-empty sections found');
 
   const existing = new Set(fs.readdirSync(outDir).map((f) => f.replace(/\.md$/, '')));
   let wrote = 0;
@@ -626,7 +690,7 @@ function cmdAdopt(fileArg, opts) {
       `adopted-from: ${JSON.stringify(src)}`,
       '---',
     ].join('\n');
-    fs.writeFileSync(file, `${fm}\n\n${sec.lines.join('\n').trim()}\n`);
+    fs.writeFileSync(file, `${fm}\n${sec.text}`);
     wrote++;
     log(`  ${id} ← ${JSON.stringify(sec.title ?? '(preamble)')}`);
   });
@@ -658,18 +722,21 @@ function cmdMigrate(idArg, opts) {
   const blockFile = path.join(ROOT, 'blocks/adopted', `${id}.md`);
   const text = readIf(blockFile);
   if (text == null) die(`no adopted block ${blockFile} (migrate applies to blocks/adopted/ only)`);
-  const { body } = parseFrontmatter(text, id);
+  const { body } = parseFrontmatter(text, id, true);
   const probeFile = path.join(ROOT, 'probes.d', `${id}.sh`);
   if (exists(probeFile) && !opts.force) die(`${probeFile} exists (--force to overwrite)`);
+  let delimiter = 'GROUNDFACT_ORACLE';
+  const bodyLines = new Set(body.split(/\r?\n/));
+  while (bodyLines.has(delimiter)) delimiter += '_';
   const probe = [
     '#!/bin/sh',
     `# frozen probe — generated by groundfact migrate from blocks/adopted/${id}.md`,
     '# It echoes the adopted text verbatim: that text is the ORACLE, the ground',
     '# truth as the human wrote it. Replace the heredoc with real detection;',
     '# the output must stay byte-stable unless reality changed. See SKILL.md.',
-    "cat <<'GROUNDFACT_ORACLE'",
+    `cat <<'${delimiter}'`,
     body,
-    'GROUNDFACT_ORACLE',
+    delimiter,
     'exit 0',
     '',
   ].join('\n');
